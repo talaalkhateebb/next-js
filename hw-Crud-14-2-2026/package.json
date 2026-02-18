@@ -1,0 +1,12 @@
+{
+  "name": "session28-crud-api",
+  "version": "1.0.0",
+  "description": "Session 28 Homework – CRUD API + Validation + Bonus",
+  "main": "app.js",
+  "scripts": {
+    "start": "node app.js"
+  },
+  "dependencies": {
+    "express": "^4.18.2"
+  }
+}
