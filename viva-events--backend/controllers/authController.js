@@ -177,6 +177,15 @@ const getProfile = async (req, res) => {
         });
     }
 };
+const saveFcmToken = async (req, res) => {
+    try {
+        const { fcmToken } = req.body;
+        await User.findByIdAndUpdate(req.user.id, { fcmToken });
+        res.json({ success: true, message: 'FCM token saved' });
+    } catch (error) {
+        res.status(500).json({ success: false, message: 'Server error' });
+    }
+};
 
 module.exports = {
     register,

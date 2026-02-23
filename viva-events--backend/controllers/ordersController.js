@@ -1,23 +1,20 @@
 const Order = require('../models/Order');
 const Cart = require('../models/Cart');
-const mongoose = require('mongoose');
+
+// ✅ FIXED: Removed mongoose.startSession() / startTransaction()
+// Transactions require a MongoDB Replica Set — not available on standalone local MongoDB.
+// Sequential operations are safe here since order is created before cart is cleared.
 
 // Create order from cart
 const createOrder = async (req, res) => {
-    const session = await mongoose.startSession();
-    session.startTransaction();
-    
     try {
         const userId = req.user.id;
         const { notes } = req.body;
 
         // Get cart items with populated service data
-        const cartItems = await Cart.find({ user: userId })
-            .populate('service')
-            .session(session);
+        const cartItems = await Cart.find({ user: userId }).populate('service');
 
         if (cartItems.length === 0) {
-            await session.abortTransaction();
             return res.status(400).json({
                 success: false,
                 message: 'Cart is empty'
@@ -29,8 +26,9 @@ const createOrder = async (req, res) => {
         let totalPrice = 0;
 
         for (const item of cartItems) {
+            if (!item.service) continue; // skip if service was deleted
+
             if (!item.service.isActive) {
-                await session.abortTransaction();
                 return res.status(400).json({
                     success: false,
                     message: `Service "${item.service.title}" is no longer available`
@@ -38,29 +36,34 @@ const createOrder = async (req, res) => {
             }
 
             orderItems.push({
-                service: item.service._id,
+                service:  item.service._id,
                 quantity: item.quantity,
-                price: item.service.price
+                price:    item.service.price
             });
 
             totalPrice += item.service.price * item.quantity;
         }
 
-        // Create order
-        const order = await Order.create([{
-            user: userId,
-            items: orderItems,
+        if (orderItems.length === 0) {
+            return res.status(400).json({
+                success: false,
+                message: 'No valid items in cart'
+            });
+        }
+
+        // Create order (no session/transaction needed)
+        const order = await Order.create({
+            user:       userId,
+            items:      orderItems,
             totalPrice,
-            notes: notes || ''
-        }], { session });
+            notes:      notes || ''
+        });
 
-        // Clear cart
-        await Cart.deleteMany({ user: userId }, { session });
+        // Clear cart after order is successfully created
+        await Cart.deleteMany({ user: userId });
 
-        await session.commitTransaction();
-
-        // Get order with populated data
-        const populatedOrder = await Order.findById(order[0]._id)
+        // Return populated order
+        const populatedOrder = await Order.findById(order._id)
             .populate('user', 'name email phone')
             .populate('items.service', 'title image');
 
@@ -71,14 +74,11 @@ const createOrder = async (req, res) => {
         });
 
     } catch (error) {
-        await session.abortTransaction();
         console.error('Create order error:', error);
         res.status(500).json({
             success: false,
             message: 'Server error'
         });
-    } finally {
-        session.endSession();
     }
 };
 
@@ -98,10 +98,7 @@ const getUserOrders = async (req, res) => {
 
     } catch (error) {
         console.error('Get user orders error:', error);
-        res.status(500).json({
-            success: false,
-            message: 'Server error'
-        });
+        res.status(500).json({ success: false, message: 'Server error' });
     }
 };
 
@@ -116,23 +113,14 @@ const getOrder = async (req, res) => {
             .populate('items.service', 'title image thumbnail');
 
         if (!order) {
-            return res.status(404).json({
-                success: false,
-                message: 'Order not found'
-            });
+            return res.status(404).json({ success: false, message: 'Order not found' });
         }
 
-        res.json({
-            success: true,
-            data: order
-        });
+        res.json({ success: true, data: order });
 
     } catch (error) {
         console.error('Get order error:', error);
-        res.status(500).json({
-            success: false,
-            message: 'Server error'
-        });
+        res.status(500).json({ success: false, message: 'Server error' });
     }
 };
 
@@ -140,28 +128,19 @@ const getOrder = async (req, res) => {
 const getAllOrders = async (req, res) => {
     try {
         const { status } = req.query;
-
         const filter = {};
-        if (status) {
-            filter.status = status;
-        }
+        if (status) filter.status = status;
 
         const orders = await Order.find(filter)
             .populate('user', 'name email phone')
             .populate('items.service', 'title')
             .sort({ createdAt: -1 });
 
-        res.json({
-            success: true,
-            data: orders
-        });
+        res.json({ success: true, data: orders });
 
     } catch (error) {
         console.error('Get all orders error:', error);
-        res.status(500).json({
-            success: false,
-            message: 'Server error'
-        });
+        res.status(500).json({ success: false, message: 'Server error' });
     }
 };
 
@@ -173,40 +152,24 @@ const updateOrderStatus = async (req, res) => {
 
         const validStatuses = ['pending', 'confirmed', 'cancelled', 'completed'];
         if (!validStatuses.includes(status)) {
-            return res.status(400).json({
-                success: false,
-                message: 'Invalid status'
-            });
+            return res.status(400).json({ success: false, message: 'Invalid status' });
         }
 
-        const order = await Order.findByIdAndUpdate(
-            id,
-            { status },
-            { new: true }
-        );
+        const order = await Order.findByIdAndUpdate(id, { status }, { new: true });
 
         if (!order) {
-            return res.status(404).json({
-                success: false,
-                message: 'Order not found'
-            });
+            return res.status(404).json({ success: false, message: 'Order not found' });
         }
 
-        res.json({
-            success: true,
-            message: 'Order status updated'
-        });
+        res.json({ success: true, message: 'Order status updated' });
 
     } catch (error) {
         console.error('Update order status error:', error);
-        res.status(500).json({
-            success: false,
-            message: 'Server error'
-        });
+        res.status(500).json({ success: false, message: 'Server error' });
     }
 };
 
-// Cancel order (User can cancel their own pending orders)
+// Cancel order (User — pending orders only)
 const cancelOrder = async (req, res) => {
     try {
         const { id } = req.params;
@@ -215,13 +178,9 @@ const cancelOrder = async (req, res) => {
         const order = await Order.findOne({ _id: id, user: userId });
 
         if (!order) {
-            return res.status(404).json({
-                success: false,
-                message: 'Order not found'
-            });
+            return res.status(404).json({ success: false, message: 'Order not found' });
         }
 
-        // Only pending orders can be cancelled
         if (order.status !== 'pending') {
             return res.status(400).json({
                 success: false,
@@ -232,17 +191,11 @@ const cancelOrder = async (req, res) => {
         order.status = 'cancelled';
         await order.save();
 
-        res.json({
-            success: true,
-            message: 'Order cancelled successfully'
-        });
+        res.json({ success: true, message: 'Order cancelled successfully' });
 
     } catch (error) {
         console.error('Cancel order error:', error);
-        res.status(500).json({
-            success: false,
-            message: 'Server error'
-        });
+        res.status(500).json({ success: false, message: 'Server error' });
     }
 };
 

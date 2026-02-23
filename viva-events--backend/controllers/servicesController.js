@@ -65,59 +65,44 @@ const getService = async (req, res) => {
 // Create new service (Admin only)
 const createService = async (req, res) => {
     try {
-        const { title, subtitle, description, price, currency, category } = req.body;
+        const { title, subtitle, description, price, currency, category, tempFileName } = req.body;
 
-        // Validate required fields
         if (!title || !price) {
-            return res.status(400).json({
-                success: false,
-                message: 'Title and price are required'
-            });
+            return res.status(400).json({ success: false, message: 'Title and price are required' });
         }
 
         let imagePath = null;
         let thumbnailPath = null;
 
-        // Process uploaded image
-        if (req.file) {
-            const processed = await processImage(req.file.path);
-            imagePath = `/uploads/services/${processed.original}`;
-            thumbnailPath = `/uploads/services/${processed.thumbnail}`;
+        // لو في صورة مؤقتة، انقلها للمكان الدائم
+        if (tempFileName) {
+            const tempPath = path.join(__dirname, '../uploads/temp', tempFileName);
+            const finalDir = path.join(__dirname, '../uploads/services');
+            const finalPath = path.join(finalDir, tempFileName.replace('temp-', 'service-'));
+
+            if (fs.existsSync(tempPath)) {
+                fs.renameSync(tempPath, finalPath); // انقل الملف
+                const processed = await processImage(finalPath);
+                imagePath = `/uploads/services/${processed.original}`;
+                thumbnailPath = `/uploads/services/${processed.thumbnail}`;
+            }
         }
 
-        // Create service
         const service = await Service.create({
-            title,
-            subtitle,
-            description,
-            price,
+            title, subtitle, description, price,
             currency: currency || 'JOD',
             image: imagePath,
             thumbnail: thumbnailPath,
             category: category || 'other'
         });
 
-        res.status(201).json({
-            success: true,
-            message: 'Service created successfully',
-            data: service
-        });
+        res.status(201).json({ success: true, data: service });
 
     } catch (error) {
         console.error('Create service error:', error);
-        
-        // Delete uploaded file if error
-        if (req.file) {
-            fs.unlinkSync(req.file.path);
-        }
-
-        res.status(500).json({
-            success: false,
-            message: 'Server error'
-        });
+        res.status(500).json({ success: false, message: 'Server error' });
     }
 };
-
 // Update service (Admin only)
 const updateService = async (req, res) => {
     try {
